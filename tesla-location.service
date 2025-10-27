@@ -1,0 +1,25 @@
+[Unit]
+Description=Tesla Location Server for OBS Streaming
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/source/obs-teslamate
+ExecStart=%h/source/obs-teslamate/tesla-location-server
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+# Environment (if needed)
+Environment="MQTT_BROKER=192.168.1.2:1883"
+Environment="ADMIN_USERNAME=<SET THIS>"
+Environment="ADMIN_PASSWORD=<SET THIS>"
+Environment="MAPBOX_TOKEN=<SET THIS>"
+Environment="TIMEZONEDB_TOKEN=<SET THIS>"
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tesla Location & Status - Live Overlay</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: 'Segoe UI', 'Arial', sans-serif;
+            background: transparent;
+            color: #ffffff;
+            margin: 0;
+            padding: 15px;
+            line-height: 1.6;
+            font-size: 16px;
+        }
+        .overlay-content {
+            white-space: pre-line;
+            padding: 15px 20px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.9);
+            backdrop-filter: blur(5px);
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            max-width: 300px;
+        }
+        .loading {
+            color: #ffd700;
+            font-style: italic;
+        }
+        .error {
+            color: #ff6b6b;
+            font-weight: 500;
+        }
+        .title {
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+        .separator {
+            color: rgba(255, 255, 255, 0.4);
+            margin: 8px 0;
+        }
+        .offline-content {
+            text-align: center;
+            padding: 15px 20px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.9);
+            backdrop-filter: blur(5px);
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            max-width: 300px;
+        }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <!-- Live overlay content -->
+    <div class="overlay-content" id="live-content">
+        <div class="loading">Loading live data...</div>
+    </div>
+    
+    <!-- Offline overlay content -->
+    <div class="offline-content hidden" id="offline-content">
+        <h3>Currently Offline</h3>
+        <p>The tracking system is currently disabled.</p>
+    </div>
+
+    <script>
+        let currentConfig = null;
+        let updateInterval = null;
+
+        // Function to check config and switch views
+        async function checkConfigAndSwitchView() {
+            try {
+                const response = await fetch('/config');
+                const config = await response.json();
+                
+                const liveContent = document.getElementById('live-content');
+                const offlineContent = document.getElementById('offline-content');
+                
+                if (config.overlay_enabled) {
+                    // Show live overlay
+                    liveContent.classList.remove('hidden');
+                    offlineContent.classList.add('hidden');
+                    
+                    // Start updating overlay data if not already running
+                    if (!updateInterval) {
+                        startOverlayUpdates();
+                    }
+                } else {
+                    // Show offline overlay
+                    liveContent.classList.add('hidden');
+                    offlineContent.classList.remove('hidden');
+                    
+                    // Stop updating overlay data
+                    if (updateInterval) {
+                        clearInterval(updateInterval);
+                        updateInterval = null;
+                    }
+                }
+                
+                currentConfig = config;
+            } catch (error) {
+                console.error('Error checking config:', error);
+                // On error, show offline content
+                document.getElementById('live-content').classList.add('hidden');
+                document.getElementById('offline-content').classList.remove('hidden');
+            }
+        }
+
+        function startOverlayUpdates() {
+            async function updateOverlayData() {
+                try {
+                    const response = await fetch('/overlay-data');
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    const contentElement = document.getElementById('live-content');
+                    
+                    if (data.content) {
+                        contentElement.innerHTML = data.content;
+                    } else {
+                        contentElement.innerHTML = '<div class="error">No data available</div>';
+                    }
+                } catch (error) {
+                    console.error('Error fetching overlay data:', error);
+                    const contentElement = document.getElementById('live-content');
+                    contentElement.innerHTML = '<div class="error">Error loading data</div>';
+                }
+            }
+
+            // Update immediately and then every 10 seconds
+            updateOverlayData();
+            updateInterval = setInterval(updateOverlayData, 10000);
+        }
+
+        // Initial config check and then check every 2 seconds
+        checkConfigAndSwitchView();
+        setInterval(checkConfigAndSwitchView, 2000);
+    </script>
+</body>
+</html>

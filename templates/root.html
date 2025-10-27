@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tesla Location Tracker</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100vw; }
+        .info-box {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.9);
+            backdrop-filter: blur(5px);
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+			color: #ffffff;
+            z-index: 1000;
+            font-family: Arial, sans-serif;
+            min-width: 200px;
+        }
+        .info-box h3 { margin: 0 0 10px 0; }
+        .info-item { margin: 5px 0; }
+        .label { font-weight: bold; }
+        
+        /* Offline view styles */
+        .offline-container {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .offline-message {
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        /* Hidden by default */
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <!-- Map view -->
+    <div id="map-container">
+        <div id="map"></div>
+        <div class="info-box">
+            <div class="info-item"><span class="label">Battery:</span> <span id="battery">--</span>%</div>
+            <div class="info-item"><span class="label">Range:</span> <span id="range">--</span> km</div>
+            <div class="info-item"><span class="label">Speed:</span> <span id="speed">--</span> km/h</div>
+            <div class="info-item"><span class="label">Elevation:</span> <span id="elevation">--</span> m</div>
+            <div class="info-item"><span class="label">Direction:</span> <span id="direction">--</span></div>
+            <div class="info-item" id="eta-item" style="display: none;"><span class="label">ETA:</span> <span id="eta">--</span> min</div>
+            <div class="info-item" id="distance-item" style="display: none;"><span class="label">Distance:</span> <span id="distance">--</span> km</div>
+            <div class="info-item" id="arrival-battery-item" style="display: none;"><span class="label">Battery at arrival:</span> <span id="arrival-battery">--</span>%</div>
+        </div>
+    </div>
+    
+    <!-- Offline view -->
+    <div id="offline-container" class="offline-container hidden">
+        <div class="offline-message">
+            <h1>Currently Offline</h1>
+            <p>The map display is currently disabled.</p>
+        </div>
+    </div>
+
+    <script>
+        let map = null;
+        let marker = null;
+        let destinationMarker = null;
+        let routeLine = null;
+        let currentConfig = null;
+        let mapInitialized = false;
+
+        function calculateSunPosition(lat, lng, date) {
+            // Ensure date is a Date object
+            if (!(date instanceof Date)) {
+                date = new Date(date);
+            }
+
+            // Simplified sun position calculation
+            const dayOfYear = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000);
+            const p = Math.asin(0.39795 * Math.cos(0.0172 * (dayOfYear - 173)));
+            const argument = (Math.sin(p) * Math.sin(lat * Math.PI / 180) - Math.sin(-6 * Math.PI / 180)) / 
+                           (Math.cos(p) * Math.cos(lat * Math.PI / 180));
+            
+            if (argument < -1) return { sunrise: 0, sunset: 24 }; // Polar day
+            if (argument > 1) return { sunrise: 12, sunset: 12 }; // Polar night
+            
+            const hourAngle = Math.acos(argument) * 180 / Math.PI / 15;
+            const sunrise = 12 - hourAngle;
+            const sunset = 12 + hourAngle;
+            
+            return { sunrise, sunset };
+        }
+
+        function updateMapLighting(lat, lng) {
+            // Get current local time (we'll use the browser's time as approximation)
+            const now = new Date();
+            const currentHour = now.getHours() + now.getMinutes() / 60;
+            
+            // Calculate sun position
+            const sun = calculateSunPosition(lat, lng, now);
+            
+            let lightPreset = 'day';
+            
+            if (currentHour < sun.sunrise - 0.5 || currentHour > sun.sunset + 0.5) {
+                lightPreset = 'night';
+            } else if (currentHour < sun.sunrise + 0.5) {
+                lightPreset = 'dawn';
+            } else if (currentHour > sun.sunset - 0.5) {
+                lightPreset = 'dusk';
+            }
+            
+            // Update map lighting if the style supports it
+            if (map.isStyleLoaded()) {
+                try {
+                    map.setConfigProperty('basemap', 'lightPreset', lightPreset);
+                } catch (e) {
+                    // Fallback for older versions or unsupported styles
+                    console.log('Light preset not supported:', e);
+                }
+            }
+        }
+
+        // Function to check config and switch views
+        async function checkConfigAndSwitchView() {
+            try {
+                const response = await fetch('/config');
+                const config = await response.json();
+                
+                const mapContainer = document.getElementById('map-container');
+                const offlineContainer = document.getElementById('offline-container');
+                
+                if (config.map_enabled) {
+                    // Show map view
+                    mapContainer.classList.remove('hidden');
+                    offlineContainer.classList.add('hidden');
+                    
+                    // Initialize map if not already done
+                    if (!mapInitialized) {
+                        initializeMap(config);
+                        mapInitialized = true;
+                    }
+                    
+                    // Update map token if changed
+                    if (currentConfig && currentConfig.mapbox_token !== config.mapbox_token) {
+                        // Reinitialize map with new token
+                        if (map) {
+                            map.remove();
+                        }
+                        mapInitialized = false;
+                        initializeMap(config);
+                        mapInitialized = true;
+                    }
+                } else {
+                    // Show offline view
+                    mapContainer.classList.add('hidden');
+                    offlineContainer.classList.remove('hidden');
+                }
+                
+                currentConfig = config;
+            } catch (error) {
+                console.error('Error checking config:', error);
+            }
+        }
+
+        function initializeMap(config) {
+            // Set Mapbox access token
+            mapboxgl.accessToken = config.mapbox_token;
+            
+            map = new mapboxgl.Map({
+                container: 'map',
+                style: 'mapbox://styles/mapbox/standard',
+                center: [115.8605, -31.9505], // Perth, Australia
+                zoom: 10
+            });
+
+            map.addControl(new mapboxgl.NavigationControl());
+
+            // Create car marker element
+            var el = document.createElement('div');
+            el.className = 'car-marker';
+            el.style.width = '100px';
+            el.style.height = '100px';
+            el.style.backgroundImage = 'url(/public/car_icon.png)';
+            el.style.backgroundSize = 'contain';
+            el.style.backgroundRepeat = 'no-repeat';
+            el.style.backgroundPosition = 'center';
+            el.style.filter = 'drop-shadow(0 0 3px rgba(0,0,0,0.8))'; // Add shadow for visibility
+
+            marker = new mapboxgl.Marker(el)
+                .setLngLat([115.8605, -31.9505])
+                .addTo(map);
+
+            // Set initial lighting for Australia center location
+            updateMapLighting(-31.9505, 115.8605);
+
+            // Start updating location data
+            startLocationUpdates();
+        }
+
+        function startLocationUpdates() {
+            async function updateLocation() {
+                try {
+                    const response = await fetch('/location');
+                    const data = await response.json();
+                    
+                    if (data.latitude && data.longitude && map && marker) {
+                        var coords = [data.longitude, data.latitude];
+
+                        // Update marker position
+                        marker.setLngLat(coords);
+                        
+                        // Update info display
+                        document.getElementById('battery').textContent = data.battery ? data.battery.toFixed(1) : '--';
+                        document.getElementById('range').textContent = data.range ? data.range.toFixed(0) : '--';
+                        document.getElementById('speed').textContent = data.speed ? (data.speed * 3.6).toFixed(0) : '--'; // Convert m/s to km/h
+                        document.getElementById('elevation').textContent = data.elevation ? data.elevation.toFixed(0) : '--';
+                        
+                        // Update direction
+                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+                        const direction = directions[Math.round(data.heading / 45) % 8];
+                        document.getElementById('direction').textContent = direction;
+
+                        // Handle destination info
+                        if (data.destination && data.destination !== "") {
+                            document.getElementById('eta-item').style.display = 'block';
+                            document.getElementById('distance-item').style.display = 'block';
+                            document.getElementById('arrival-battery-item').style.display = 'block';
+                            
+                            document.getElementById('eta').textContent = data.minutes_to_arrival ? data.minutes_to_arrival.toFixed(0) : '--';
+                            document.getElementById('distance').textContent = data.miles_to_arrival ? (data.miles_to_arrival * 1.60934).toFixed(1) : '--';
+                            document.getElementById('arrival-battery').textContent = data.energy_at_arrival ? data.energy_at_arrival : '--';
+                            
+                            // Add/update destination marker
+                            if (data.destination_latitude && data.destination_longitude) {
+                                if (destinationMarker) {
+                                    destinationMarker.setLngLat([data.destination_longitude, data.destination_latitude]);
+                                } else {
+                                    const destElement = document.createElement('div');
+                                    destElement.innerHTML = `
+                                        <svg width="25" height="35" viewBox="0 0 25 35">
+                                            <ellipse cx="12.5" cy="32" rx="6" ry="2.5" fill="rgba(0, 255, 0, 0.3)"/>
+                                            <path d="M12.5 0C5.6 0 0 5.6 0 12.5c0 10.4 12.5 22.5 12.5 22.5s12.5-12.1 12.5-22.5C25 5.6 19.4 0 12.5 0z" fill="#00ff00"/>
+                                            <circle cx="12.5" cy="12.5" r="6" fill="#ffffff"/>
+                                            <circle cx="12.5" cy="12.5" r="3" fill="#00ff00"/>
+                                        </svg>
+                                    `;
+                                    destinationMarker = new mapboxgl.Marker(destElement)
+                                        .setLngLat([data.destination_longitude, data.destination_latitude])
+                                        .addTo(map);
+                                }
+                                
+                                // Add route line if enabled in config
+                                if (currentConfig && currentConfig.show_route) {
+                                    updateRouteLine([data.longitude, data.latitude], [data.destination_longitude, data.destination_latitude]);
+                                }
+                            }
+                        } else {
+                            document.getElementById('eta-item').style.display = 'none';
+                            document.getElementById('distance-item').style.display = 'none';
+                            document.getElementById('arrival-battery-item').style.display = 'none';
+                            
+                            if (destinationMarker) {
+                                destinationMarker.remove();
+                                destinationMarker = null;
+                            }
+                            if (routeLine) {
+                                if (map.getSource('route')) {
+                                    map.removeLayer('route');
+                                    map.removeSource('route');
+                                }
+                                routeLine = null;
+                            }
+                        }
+
+                        // Center the map on the car with closer zoom
+                        var options = {
+                            center: coords,
+                            zoom: 11,
+                            essential: true // This animation is considered essential with respect to prefers-reduced-motion
+                        };
+                        
+                        map.easeTo(options);
+
+                        // Update map lighting based on local time
+                        updateMapLighting(data.latitude, data.longitude);
+                    }
+                } catch (error) {
+                    console.error('Error fetching location:', error);
+                }
+            }
+
+            // Update immediately and then every 5 seconds
+            updateLocation();
+            setInterval(updateLocation, 5000);
+        }
+
+        function updateRouteLine(start, end) {
+            if (!map) return;
+            
+            const routeData = {
+                'type': 'Feature',
+                'properties': {},
+                'geometry': {
+                    'type': 'LineString',
+                    'coordinates': [start, end]
+                }
+            };
+
+            if (map.getSource('route')) {
+                map.getSource('route').setData(routeData);
+            } else {
+                map.addSource('route', {
+                    'type': 'geojson',
+                    'data': routeData
+                });
+
+                map.addLayer({
+                    'id': 'route',
+                    'type': 'line',
+                    'source': 'route',
+                    'layout': {
+                        'line-join': 'round',
+                        'line-cap': 'round'
+                    },
+                    'paint': {
+                        'line-color': '#3b82f6',
+                        'line-width': 3,
+                        'line-opacity': 0.8
+                    }
+                });
+            }
+        }
+
+        // Initial config check and then check every 2 seconds
+        checkConfigAndSwitchView();
+        setInterval(checkConfigAndSwitchView, 2000);
+    </script>
+</body>
+</html>
