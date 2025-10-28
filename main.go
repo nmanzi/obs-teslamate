@@ -112,6 +112,7 @@ func main() {
 	// Setup HTTP server
 	http.HandleFunc("/{$}", serveRoot)
 	http.HandleFunc("/location", serveLocationJSON)
+	http.HandleFunc("/local-time", serveLocalTime)
 	http.HandleFunc("/overlay", serveOverlay)
 	http.HandleFunc("/overlay-data", serveOverlayData)
 	http.HandleFunc("/config", serveConfig)
@@ -254,6 +255,41 @@ func serveLocationJSON(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, "Map is disabled in configuration.", http.StatusForbidden)
 	}
+}
+
+func serveLocalTime(w http.ResponseWriter, r *http.Request) {
+	// Parse latitude and longitude from query parameters
+	latStr := r.URL.Query().Get("lat")
+	lngStr := r.URL.Query().Get("lng")
+
+	if latStr == "" || lngStr == "" {
+		http.Error(w, "Missing lat or lng parameters", http.StatusBadRequest)
+		return
+	}
+
+	lat, err := strconv.ParseFloat(latStr, 64)
+	if err != nil {
+		http.Error(w, "Invalid latitude parameter", http.StatusBadRequest)
+		return
+	}
+
+	lng, err := strconv.ParseFloat(lngStr, 64)
+	if err != nil {
+		http.Error(w, "Invalid longitude parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Get local time for the given coordinates
+	localTime, timezone := getLocalTime(lat, lng)
+
+	// Return as JSON
+	response := map[string]string{
+		"time":     localTime,
+		"timezone": timezone,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func serveOverlay(w http.ResponseWriter, r *http.Request) {

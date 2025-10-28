@@ -7,14 +7,15 @@ Perfect for IRL streaming during road trips, allowing viewers to see your real-t
 ## Features
 
 - 🗺️ **Live Map View**: Real-time location tracking with MapBox integration and route visualization
+- 🌅 **Dynamic Lighting**: Map automatically adjusts lighting (day/night/dawn/dusk) based on accurate sun calculations (using SunCalc library)
 - 📊 **Status Dashboard**: Battery level, range, speed, heading, elevation, and vehicle state
 - 📝 **Text Overlay**: Formatted text output for OBS including weather and location data
 - 🌤️ **Weather Integration**: Current weather conditions at your location (using Open-Meteo API)
 - 🌍 **Location Services**: Neighborhood/city names and local time (using TimeZoneDB API)
 - 📡 **MQTT Integration**: Connects to your Teslamate MQTT broker
 - 🎛️ **Real-time Configuration**: Admin interface with live config changes (no restart required)
-- � **Route Tracking**: Active route destination, ETA, and arrival battery level
-- �🔄 **Auto-updating**: Map updates every 5 seconds, overlay every 10 seconds
+- 🚗 **Route Tracking**: Active route destination, ETA, and arrival battery level
+- 🔄 **Auto-updating**: Map updates every 5 seconds, overlay every 10 seconds
 - 🛡️ **Secure Admin**: Session-based authentication for configuration changes
 - 📱 **Responsive Design**: Works on desktop and mobile devices
 
@@ -119,6 +120,12 @@ Login with your `ADMIN_USERNAME` and `ADMIN_PASSWORD`, then access the admin pan
 http://localhost:8081/location
 ```
 Returns real-time Tesla location and status data.
+
+**Local Time:**
+```
+http://localhost:8081/local-time?lat=LATITUDE&lng=LONGITUDE
+```
+Returns local time and timezone for given coordinates. Used by the map for dynamic lighting.
 
 **Configuration:**
 ```
@@ -416,6 +423,7 @@ You can poll the location endpoint and trigger webhooks for specific events (geo
 ## Credits
 
 - **Maps**: Mapbox (API required)
+- **Sun Calculations**: SunCalc library for accurate sunrise/sunset times
 - **Weather**: Open-Meteo API (free, no API key required)
 - **Location Names**: Nominatim/OpenStreetMap (free)
 - **Time Zones**: TimeZoneDB API (free tier available)

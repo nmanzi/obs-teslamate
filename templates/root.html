@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet">
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.js"></script>
     <style>
         body { margin: 0; padding: 0; }
         #map { height: 100vh; width: 100vw; }
@@ -81,55 +82,107 @@
         let routeLine = null;
         let currentConfig = null;
         let mapInitialized = false;
+        let lastLightingUpdate = 0;
+        let cachedTimeOffset = 0; // Offset in hours from browser time
 
-        function calculateSunPosition(lat, lng, date) {
-            // Ensure date is a Date object
-            if (!(date instanceof Date)) {
-                date = new Date(date);
-            }
-
-            // Simplified sun position calculation
-            const dayOfYear = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000);
-            const p = Math.asin(0.39795 * Math.cos(0.0172 * (dayOfYear - 173)));
-            const argument = (Math.sin(p) * Math.sin(lat * Math.PI / 180) - Math.sin(-6 * Math.PI / 180)) / 
-                           (Math.cos(p) * Math.cos(lat * Math.PI / 180));
+        function getSunTimes(lat, lng, date) {
+            // Use SunCalc library for accurate sun position calculations
+            const times = SunCalc.getTimes(date, lat, lng);
             
-            if (argument < -1) return { sunrise: 0, sunset: 24 }; // Polar day
-            if (argument > 1) return { sunrise: 12, sunset: 12 }; // Polar night
+            // Convert to hours for easier comparison
+            const sunrise = times.sunrise.getHours() + times.sunrise.getMinutes() / 60;
+            const sunset = times.sunset.getHours() + times.sunset.getMinutes() / 60;
+            const dawn = times.dawn.getHours() + times.dawn.getMinutes() / 60;
+            const dusk = times.dusk.getHours() + times.dusk.getMinutes() / 60;
+            const nauticalDawn = times.nauticalDawn.getHours() + times.nauticalDawn.getMinutes() / 60;
+            const nauticalDusk = times.nauticalDusk.getHours() + times.nauticalDusk.getMinutes() / 60;
             
-            const hourAngle = Math.acos(argument) * 180 / Math.PI / 15;
-            const sunrise = 12 - hourAngle;
-            const sunset = 12 + hourAngle;
-            
-            return { sunrise, sunset };
+            return { 
+                sunrise, 
+                sunset, 
+                dawn, 
+                dusk, 
+                nauticalDawn, 
+                nauticalDusk 
+            };
         }
 
-        function updateMapLighting(lat, lng) {
-            // Get current local time (we'll use the browser's time as approximation)
-            const now = new Date();
-            const currentHour = now.getHours() + now.getMinutes() / 60;
-            
-            // Calculate sun position
-            const sun = calculateSunPosition(lat, lng, now);
-            
-            let lightPreset = 'day';
-            
-            if (currentHour < sun.sunrise - 0.5 || currentHour > sun.sunset + 0.5) {
-                lightPreset = 'night';
-            } else if (currentHour < sun.sunrise + 0.5) {
-                lightPreset = 'dawn';
-            } else if (currentHour > sun.sunset - 0.5) {
-                lightPreset = 'dusk';
-            }
-            
-            // Update map lighting if the style supports it
-            if (map.isStyleLoaded()) {
-                try {
-                    map.setConfigProperty('basemap', 'lightPreset', lightPreset);
-                } catch (e) {
-                    // Fallback for older versions or unsupported styles
-                    console.log('Light preset not supported:', e);
+        async function updateMapLighting(lat, lng) {
+            try {
+                const now = Date.now();
+                
+                // Only fetch new time data every 10 minutes to avoid excessive API calls
+                if (now - lastLightingUpdate > 600000) {
+                    try {
+                        // Get the actual local time at the car's location from the server
+                        const response = await fetch(`/local-time?lat=${lat}&lng=${lng}`);
+                        
+                        if (response.ok) {
+                            const timeData = await response.json();
+                            // Parse the local time (format: "HH:MM:SS")
+                            const timeParts = timeData.time.split(':');
+                            const serverLocalHour = parseInt(timeParts[0]) + parseInt(timeParts[1]) / 60;
+                            
+                            // Calculate offset from browser time
+                            const browserTime = new Date();
+                            const browserHour = browserTime.getHours() + browserTime.getMinutes() / 60;
+                            cachedTimeOffset = serverLocalHour - browserHour;
+                            
+                            lastLightingUpdate = now;
+                        } else {
+                            console.warn('Could not fetch local time from server');
+                        }
+                    } catch (fetchError) {
+                        console.warn('Error fetching local time:', fetchError);
+                    }
                 }
+                
+                // Use cached offset to estimate current local time
+                const browserTime = new Date();
+                const currentHour = (browserTime.getHours() + browserTime.getMinutes() / 60 + cachedTimeOffset + 24) % 24;
+                
+                // Create a date object for the local time at the car's location
+                const localDate = new Date(browserTime.getTime() + (cachedTimeOffset * 60 * 60 * 1000));
+                
+                // Get accurate sun times using SunCalc
+                const sunTimes = getSunTimes(lat, lng, localDate);
+                
+                // Determine lighting preset based on more sophisticated sun position logic
+                let lightPreset = 'day';
+                
+                if (currentHour < sunTimes.nauticalDawn || currentHour > sunTimes.nauticalDusk) {
+                    // Complete darkness - nautical twilight and beyond
+                    lightPreset = 'night';
+                } else if (currentHour < sunTimes.dawn) {
+                    // Between nautical dawn and civil dawn
+                    lightPreset = 'night';
+                } else if (currentHour < sunTimes.sunrise) {
+                    // Civil twilight before sunrise
+                    lightPreset = 'dawn';
+                } else if (currentHour > sunTimes.dusk) {
+                    // Between civil dusk and nautical dusk
+                    lightPreset = 'night';
+                } else if (currentHour > sunTimes.sunset) {
+                    // Civil twilight after sunset
+                    lightPreset = 'dusk';
+                } else {
+                    // Between sunrise and sunset
+                    lightPreset = 'day';
+                }
+                
+                // Update map lighting if the style supports it
+                if (map && map.isStyleLoaded()) {
+                    try {
+                        map.setConfigProperty('basemap', 'lightPreset', lightPreset);
+                        console.log(`Map lighting updated: ${lightPreset} (local: ${currentHour.toFixed(1)}h, dawn: ${sunTimes.dawn.toFixed(1)}h, sunrise: ${sunTimes.sunrise.toFixed(1)}h, sunset: ${sunTimes.sunset.toFixed(1)}h, dusk: ${sunTimes.dusk.toFixed(1)}h)`);
+                    } catch (e) {
+                        // Fallback for older versions or unsupported styles
+                        console.log('Light preset not supported:', e);
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating map lighting:', error);
+                // Continue without lighting updates if there's an error
             }
         }
 
@@ -223,9 +276,9 @@
                         marker.setLngLat(coords);
                         
                         // Update info display
-                        document.getElementById('battery').textContent = data.battery ? data.battery.toFixed(1) : '--';
+                        document.getElementById('battery').textContent = data.battery ? data.battery.toFixed(0) : '--';
                         document.getElementById('range').textContent = data.range ? data.range.toFixed(0) : '--';
-                        document.getElementById('speed').textContent = data.speed ? (data.speed * 3.6).toFixed(0) : '--'; // Convert m/s to km/h
+                        document.getElementById('speed').textContent = data.speed ? data.speed.toFixed(0) : '--';
                         document.getElementById('elevation').textContent = data.elevation ? data.elevation.toFixed(0) : '--';
                         
                         // Update direction
