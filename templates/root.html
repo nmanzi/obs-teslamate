@@ -239,8 +239,6 @@
                 zoom: 10
             });
 
-            map.addControl(new mapboxgl.NavigationControl());
-
             // Create car marker element
             var el = document.createElement('div');
             el.className = 'car-marker';
@@ -307,7 +305,7 @@
                                             <ellipse cx="12.5" cy="32" rx="6" ry="2.5" fill="rgba(0, 255, 0, 0.3)"/>
                                             <path d="M12.5 0C5.6 0 0 5.6 0 12.5c0 10.4 12.5 22.5 12.5 22.5s12.5-12.1 12.5-22.5C25 5.6 19.4 0 12.5 0z" fill="#00ff00"/>
                                             <circle cx="12.5" cy="12.5" r="6" fill="#ffffff"/>
-                                            <circle cx="12.5" cy="12.5" r="3" fill="#00ff00"/>
+                                            <circle cx="12.5" cy="12.5" r="3" fill="#ff2222"/>
                                         </svg>
                                     `;
                                     destinationMarker = new mapboxgl.Marker(destElement)
